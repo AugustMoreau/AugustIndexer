@@ -1,0 +1,13 @@
+# Augustium language files
+*.aug linguist-language=Rust
+*.augustium linguist-language=Rust
+
+# Documentation
+*.md linguist-documentation
+
+# Generated files
+*.wasm linguist-generated
+*.wat linguist-generated
+
+# Vendor files
+node_modules/* linguist-vendored

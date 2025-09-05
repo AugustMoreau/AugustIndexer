@@ -1,0 +1,222 @@
+// Uniswap V3 Pool Indexer - Augustium Smart Contract
+use stdlib::collections::HashMap;
+use stdlib::events::{Event, indexed};
+
+// Core data structures
+struct Pool {
+    id: Address,
+    token0: Address,
+    token1: Address,
+    fee: u32,
+    liquidity: u128,
+    sqrt_price_x96: u256,
+    tick: i32,
+    created_at: u64,
+    block_number: u64
+}
+
+struct Swap {
+    id: String,
+    pool: Address,
+    sender: Address,
+    recipient: Address,
+    amount0: i256,
+    amount1: i256,
+    sqrt_price_x96: u256,
+    liquidity: u128,
+    tick: i32,
+    timestamp: u64,
+    block_number: u64,
+    transaction_hash: String
+}
+
+// Events for indexing
+event PoolCreated {
+    indexed pool: Address,
+    indexed token0: Address,
+    indexed token1: Address,
+    fee: u32,
+    tick_spacing: i32
+}
+
+event SwapEvent {
+    indexed pool: Address,
+    indexed sender: Address,
+    indexed recipient: Address,
+    amount0: i256,
+    amount1: i256,
+    sqrt_price_x96: u256,
+    liquidity: u128,
+    tick: i32
+}
+
+contract UniswapV3Indexer {
+    let mut pools: HashMap<Address, Pool>;
+    let mut swaps: Vec<Swap>;
+    let mut pool_count: u64;
+    let mut swap_count: u64;
+    let owner: Address;
+
+    fn constructor() {
+        self.owner = msg.sender;
+        self.pools = HashMap::new();
+        self.swaps = Vec::new();
+        self.pool_count = 0;
+        self.swap_count = 0;
+    }
+
+    // Index a new pool creation
+    pub fn index_pool_created(
+        pool: Address,
+        token0: Address,
+        token1: Address,
+        fee: u32
+    ) {
+        let pool_data = Pool {
+            id: pool,
+            token0,
+            token1,
+            fee,
+            liquidity: 0u128,
+            sqrt_price_x96: 0u256,
+            tick: 0i32,
+            created_at: block.timestamp,
+            block_number: block.number
+        };
+
+        self.pools.insert(pool, pool_data);
+        self.pool_count += 1;
+
+        emit PoolCreated {
+            pool,
+            token0,
+            token1,
+            fee,
+            tick_spacing: fee / 50 // Simplified calculation
+        };
+    }
+
+    // Index a swap transaction
+    pub fn index_swap(
+        pool: Address,
+        sender: Address,
+        recipient: Address,
+        amount0: i256,
+        amount1: i256,
+        sqrt_price_x96: u256,
+        liquidity: u128,
+        tick: i32
+    ) {
+        let swap_id = format!("{}-{}", block.hash, self.swap_count);
+        
+        let swap_data = Swap {
+            id: swap_id,
+            pool,
+            sender,
+            recipient,
+            amount0,
+            amount1,
+            sqrt_price_x96,
+            liquidity,
+            tick,
+            timestamp: block.timestamp,
+            block_number: block.number,
+            transaction_hash: tx.hash
+        };
+
+        self.swaps.push(swap_data);
+        self.swap_count += 1;
+
+        // Update pool state
+        if let Some(mut pool_data) = self.pools.get_mut(&pool) {
+            pool_data.liquidity = liquidity;
+            pool_data.sqrt_price_x96 = sqrt_price_x96;
+            pool_data.tick = tick;
+        }
+
+        emit SwapEvent {
+            pool,
+            sender,
+            recipient,
+            amount0,
+            amount1,
+            sqrt_price_x96,
+            liquidity,
+            tick
+        };
+    }
+
+    // Query functions
+    pub fn get_pool(pool_address: Address) -> Option<Pool> {
+        self.pools.get(&pool_address).cloned()
+    }
+
+    pub fn get_pools_by_token_pair(token0: Address, token1: Address) -> Vec<Pool> {
+        let mut result = Vec::new();
+        
+        for (_, pool) in &self.pools {
+            if (pool.token0 == token0 && pool.token1 == token1) ||
+               (pool.token0 == token1 && pool.token1 == token0) {
+                result.push(pool.clone());
+            }
+        }
+        
+        result
+    }
+
+    pub fn get_recent_swaps(pool: Address, limit: u32) -> Vec<Swap> {
+        let mut result = Vec::new();
+        let mut count = 0u32;
+        
+        // Get most recent swaps for the pool
+        for swap in self.swaps.iter().rev() {
+            if swap.pool == pool && count < limit {
+                result.push(swap.clone());
+                count += 1;
+            }
+        }
+        
+        result
+    }
+
+    pub fn get_top_pools_by_liquidity(limit: u32) -> Vec<Pool> {
+        let mut pools_vec: Vec<Pool> = self.pools.values().cloned().collect();
+        
+        // Sort by liquidity (descending)
+        pools_vec.sort_by(|a, b| b.liquidity.cmp(&a.liquidity));
+        
+        if pools_vec.len() > limit as usize {
+            pools_vec.truncate(limit as usize);
+        }
+        
+        pools_vec
+    }
+
+    pub fn get_swap_volume_for_period(
+        pool: Address,
+        start_time: u64,
+        end_time: u64
+    ) -> (u256, u256) {
+        let mut volume0 = 0u256;
+        let mut volume1 = 0u256;
+        
+        for swap in &self.swaps {
+            if swap.pool == pool && 
+               swap.timestamp >= start_time && 
+               swap.timestamp <= end_time {
+                volume0 += swap.amount0.abs() as u256;
+                volume1 += swap.amount1.abs() as u256;
+            }
+        }
+        
+        (volume0, volume1)
+    }
+
+    pub fn get_pool_count() -> u64 {
+        self.pool_count
+    }
+
+    pub fn get_swap_count() -> u64 {
+        self.swap_count
+    }
+}
